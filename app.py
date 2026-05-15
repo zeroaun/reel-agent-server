@@ -60,7 +60,7 @@ def claude_generate_script(prompt):
         "script 130 mots/min, keywords EN ANGLAIS obligatoirement."
     )
     body = {
-        "model": "claude-haiku-4-5-20251001",
+        "model": "claude-haiku-4-5",
         "max_tokens": 2000,
         "system": system,
         "messages": [{"role": "user", "content": user}]
