@@ -5,7 +5,7 @@ app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 ELEVENLABS_KEY = os.environ.get("ELEVENLABS_KEY", "")
-GEMINI_KEY = os.environ.get("GEMINI_KEY", "")
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_KEY", "")
 PEXELS_KEY = os.environ.get("PEXELS_KEY", "")
 
 def telegram_send_message(chat_id, text):
@@ -37,26 +37,37 @@ def download_file(url, dest):
         for chunk in r.iter_content(chunk_size=8192):
             f.write(chunk)
 
-def gemini_generate_script(prompt):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+def claude_generate_script(prompt):
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
     system = (
         "Tu es expert en réels viraux Instagram TikTok YouTube Shorts. "
-        "Réponds UNIQUEMENT avec un JSON valide sans markdown ni backticks. "
-        f"Demande: {prompt} "
-        'JSON: {"brief":"résumé","duration":60,"langue":"fr","style":"business","ton":"educatif",'
-        '"voice_id":"pNInz6obpgDQGcFmaJgB","voice_name":"Adam","script":"texte voix-off complet",'
-        '"title":"Titre max 8 mots","keywords_pexels":["en1","en2","en3","en4","en5"],'
-        '"hashtags":["#tag1","#tag2","#tag3","#tag4","#tag5","#tag6","#tag7","#tag8"]} '
-        "Règles: duration 30/60/90/120 défaut 60, langue fr/en/ar/es, "
-        "style cinematic/urban/nature/business/lifestyle, "
-        "ton motivant/educatif/storytelling/direct/emotionnel, "
-        "voices pNInz6obpgDQGcFmaJgB=Adam EXAVITQu4vr4xnSDxMaL=Bella VR6AewLTigWG4xSOukaG=Arnold jBpfuIE2acCO8z3wKNLl=Freya, "
-        "script 130 mots/min, keywords EN ANGLAIS."
+        "Réponds UNIQUEMENT avec un JSON valide sans markdown ni backticks ni commentaires."
     )
-    body = {"contents": [{"parts": [{"text": system}]}], "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}}
-    r = requests.post(url, json=body, timeout=30)
+    user = (
+        f"Demande: {prompt}\n\n"
+        'JSON attendu: {"brief":"résumé","duration":60,"langue":"fr","style":"business","ton":"educatif",'
+        '"voice_id":"pNInz6obpgDQGcFmaJgB","voice_name":"Adam","script":"texte voix-off complet adapté à la durée",'
+        '"title":"Titre accrocheur max 8 mots","keywords_pexels":["en1","en2","en3","en4","en5"],'
+        '"hashtags":["#tag1","#tag2","#tag3","#tag4","#tag5","#tag6","#tag7","#tag8"]}\n\n'
+        "Règles: duration extraire (30/60/90/120) défaut 60, langue détecter défaut fr, "
+        "style cinematic/urban/nature/business/lifestyle, ton motivant/educatif/storytelling/direct/emotionnel, "
+        "voices pNInz6obpgDQGcFmaJgB=Adam EXAVITQu4vr4xnSDxMaL=Bella VR6AewLTigWG4xSOukaG=Arnold jBpfuIE2acCO8z3wKNLl=Freya, "
+        "script 130 mots/min, keywords EN ANGLAIS obligatoirement."
+    )
+    body = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 2000,
+        "system": system,
+        "messages": [{"role": "user", "content": user}]
+    }
+    r = requests.post(url, json=body, headers=headers, timeout=30)
     r.raise_for_status()
-    raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    raw = r.json()["content"][0]["text"]
     raw = re.sub(r'```json|```', '', raw).strip()
     return json.loads(raw)
 
@@ -90,6 +101,8 @@ def generate_voice(script, voice_id, dest_path):
 
 def build_srt(script, duration):
     words = script.split()
+    if not words:
+        return ""
     wps = max(3, len(words) // max(1, int(duration / 3)))
     subs = []
     for i in range(0, len(words), wps):
@@ -97,9 +110,10 @@ def build_srt(script, duration):
         t_start = (i / len(words)) * duration
         t_end = min(((i + wps) / len(words)) * duration, duration)
         def fmt(t):
-            h, r = divmod(int(t * 1000), 3600000)
-            m, r = divmod(r, 60000)
-            s, ms = divmod(r, 1000)
+            ms = int(t * 1000)
+            h, ms = divmod(ms, 3600000)
+            m, ms = divmod(ms, 60000)
+            s, ms = divmod(ms, 1000)
             return f"{h:02}:{m:02}:{s:02},{ms:03}"
         subs.append(f"{len(subs)+1}\n{fmt(t_start)} --> {fmt(t_end)}\n{chunk}\n")
     return "\n".join(subs)
@@ -107,13 +121,13 @@ def build_srt(script, duration):
 def process_reel(prompt, chat_id, first_name):
     tmpdir = tempfile.mkdtemp()
     try:
-        telegram_send_message(chat_id, f"⏳ Génération en cours pour {first_name}...\n\n1️⃣ Script IA\n2️⃣ Clips Pexels\n3️⃣ Voix ElevenLabs\n4️⃣ Montage FFmpeg\n\nEnviron 2-3 minutes...")
+        telegram_send_message(chat_id, f"⏳ Génération en cours pour {first_name}...\n\n1️⃣ Script Claude AI\n2️⃣ Clips Pexels\n3️⃣ Voix ElevenLabs\n4️⃣ Montage FFmpeg\n\nEnviron 2-3 minutes...")
 
-        # 1. Génère le script avec Gemini
+        # 1. Script avec Claude
         try:
-            data = gemini_generate_script(prompt)
+            data = claude_generate_script(prompt)
         except Exception as e:
-            telegram_send_message(chat_id, f"❌ Erreur Gemini: {str(e)[:200]}")
+            telegram_send_message(chat_id, f"❌ Erreur Claude: {str(e)[:200]}")
             return
 
         title = data.get("title", "Réel")
@@ -125,9 +139,9 @@ def process_reel(prompt, chat_id, first_name):
         style = data.get("style", "cinematic")
         hashtags = " ".join(data.get("hashtags", []))
 
-        telegram_send_message(chat_id, f"✅ Script généré: {title}\n\n⬇️ Recherche clips Pexels...")
+        telegram_send_message(chat_id, f"✅ Script: {title}\n\n⬇️ Clips Pexels...")
 
-        # 2. Cherche clips Pexels
+        # 2. Clips Pexels
         try:
             clips_urls = pexels_search(keywords, style)
         except Exception as e:
@@ -135,10 +149,10 @@ def process_reel(prompt, chat_id, first_name):
             return
 
         if not clips_urls:
-            telegram_send_message(chat_id, "❌ Aucun clip trouvé sur Pexels.")
+            telegram_send_message(chat_id, "❌ Aucun clip Pexels trouvé.")
             return
 
-        # 3. Télécharge les clips
+        # 3. Télécharge clips
         clip_paths = []
         for i, url in enumerate(clips_urls[:6]):
             path = os.path.join(tmpdir, f"clip_{i}.mp4")
@@ -153,9 +167,9 @@ def process_reel(prompt, chat_id, first_name):
             telegram_send_message(chat_id, "❌ Impossible de télécharger les clips.")
             return
 
-        telegram_send_message(chat_id, f"✅ {len(clip_paths)} clips téléchargés\n\n🎙 Génération voix ElevenLabs...")
+        telegram_send_message(chat_id, f"✅ {len(clip_paths)} clips téléchargés\n\n🎙 Voix ElevenLabs...")
 
-        # 4. Génère la voix
+        # 4. Voix ElevenLabs
         audio_path = os.path.join(tmpdir, "voix.mp3")
         try:
             generate_voice(script, voice_id, audio_path)
@@ -163,15 +177,15 @@ def process_reel(prompt, chat_id, first_name):
             print(f"ElevenLabs error: {e}")
             audio_path = None
 
-        # 5. Génère SRT
+        # 5. SRT
         srt_content = build_srt(script, duration)
         srt_path = os.path.join(tmpdir, "subtitles.srt")
         with open(srt_path, "w", encoding="utf-8") as f:
             f.write(srt_content)
 
-        telegram_send_message(chat_id, "✅ Voix générée\n\n🎞 Montage FFmpeg en cours...")
+        telegram_send_message(chat_id, "✅ Voix générée\n\n🎞 Montage FFmpeg...")
 
-        # 6. Traite les clips
+        # 6. Traite clips 9:16
         clip_duration = duration / len(clip_paths)
         processed = []
         for i, cp in enumerate(clip_paths):
@@ -188,7 +202,7 @@ def process_reel(prompt, chat_id, first_name):
             telegram_send_message(chat_id, "❌ Erreur traitement clips.")
             return
 
-        # 7. Concatène
+        # 7. Concat
         concat_list = os.path.join(tmpdir, "concat.txt")
         with open(concat_list, "w") as f:
             for p in processed:
@@ -203,6 +217,7 @@ def process_reel(prompt, chat_id, first_name):
             cmd = ["ffmpeg", "-y", "-i", concat_out, "-i", audio_path, "-vf", vf, "-c:v", "libx264", "-preset", "fast", "-crf", "22", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", final]
         else:
             cmd = ["ffmpeg", "-y", "-i", concat_out, "-vf", vf, "-c:v", "libx264", "-preset", "fast", "-crf", "22", "-movflags", "+faststart", final]
+
         result = subprocess.run(cmd, capture_output=True, timeout=300)
 
         if not os.path.exists(final) or os.path.getsize(final) < 1000:
@@ -210,7 +225,7 @@ def process_reel(prompt, chat_id, first_name):
             return
 
         size_mb = os.path.getsize(final) / (1024 * 1024)
-        telegram_send_message(chat_id, f"✅ Vidéo montée ({size_mb:.1f} MB)\n\n📤 Envoi sur Telegram...")
+        telegram_send_message(chat_id, f"✅ Vidéo prête ({size_mb:.1f} MB)\n\n📤 Envoi Telegram...")
 
         caption = f"🎬 {title}\n⏱ {duration}s | 🎙 {voice_name}\n👤 Par: {first_name}"
         if hashtags:
@@ -219,7 +234,7 @@ def process_reel(prompt, chat_id, first_name):
 
     except Exception as e:
         print(f"Global error: {e}")
-        telegram_send_message(chat_id, f"❌ Erreur inattendue: {str(e)[:200]}")
+        telegram_send_message(chat_id, f"❌ Erreur: {str(e)[:200]}")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
