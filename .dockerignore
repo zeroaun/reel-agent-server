@@ -1,0 +1,28 @@
+# Exclude version control
+.git
+.gitignore
+
+# Exclude documentation and archives — not needed in the image
+README.md
+files.zip
+*.zip
+*.tar.gz
+
+# Exclude local environment and editor artifacts
+.env
+.env.*
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Exclude CI/CD and tooling config
+.github/
+.dockerignore
